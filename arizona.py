@@ -116,6 +116,19 @@ class LinearGaussian(GibbsSampling, Distribution):
         Email: enoriega@email.arizona.edu
     '''
 
+    @property
+    def others(self):
+        return self._others
+
+    @others.setter
+    def others(self, ot):
+        self._others = ot
+
+    @others.deleter
+    def others(self):
+        del self._others
+        self._others = np.matrix(np.zeros(self.l.shape))
+
     def __init__(self, W, l):
         ''' W is the weight matrix and l is the state vector
 
@@ -123,30 +136,41 @@ class LinearGaussian(GibbsSampling, Distribution):
         '''
 
         self.W = np.matrix(W)
-        self.l = np.matrix(l)
 
         # Enforce l to be a column vector
         if l.shape[1] > 1:
             l = l.T
 
+        self.l = np.concatenate([np.matrix(l), np.matrix([1])]) # Added the bias term
+        self.others = np.matrix(np.zeros(self.l.shape))
+
+
+        l = self.l # To avoid any further confusion
+
         assert W.shape[1] == l.shape[0], "The weight matrix and the state vector should be equivalent"
         assert ((l <= 1) & (l >= 0)).all(), "l should be a binary vector"
-
-        # Compute the weights vector, which becomes the mean vector
-        self.w = W*l #These should be numpy's matrix objects so this works
 
 
     def rvs(self, size=1):
         ''' Generates a random variate (sample)
         '''
 
+        import ipdb; ipdb.set_trace()
+
+        # Compute the state vector given the other chains
+        global_state = self.l + self.others
+
+        # Compute the weights vector, which becomes the mean vector
+        w = self.W*global_state #These should be numpy's matrix objects so this works
+
         if type(size) in (list, tuple):
             size = size[0] if len(size) > 0 else 1
 
-        variate = np.matrix(np.zeros((size, self.w.shape[0])))
+        variate = np.matrix(np.zeros((size, w.shape[0])))
 
-        for j in xrange(self.w.shape[0]):
-            variate[:, j] = stats.norm.rvs(size=(size, 1), loc=self.w[j])
+        for j in xrange(w.shape[0]):
+            #TODO: Rewrite this to avoid the loop
+            variate[:, j] = stats.norm.rvs(size=(size, 1), loc=w[j])
 
         return variate
 
@@ -155,11 +179,23 @@ class LinearGaussian(GibbsSampling, Distribution):
         ''' Computes the log likelihood according to the following formula:
         '''
 
+        # Compute the state vector given the other chains
+        global_state = self.l + self.others
 
-        if X.shape[1] < X.shape[0]:
-            X = X.T
+        # Correct the overflow in the bias term
+        global_state[-1, :] = 1.
 
-        return stats.norm.logpdf(X, loc=self.w.T)
+        # Sanity check
+        assert global_state[global_state > 1].any() == False, "There is a problem rebuilding the global state matrix"
+
+        # Compute the weights vector, which becomes the mean vector
+        w = self.W*global_state #These should be numpy's matrix objects so this works
+
+        # if X.shape[1] < X.shape[0]:
+        #     X = X.T
+        # import ipdb; ipdb.set_trace()
+
+        return np.sum(norm.logpdf(X, loc=w.T), axis=1) # w is a column vector so we transpose it to leverage numpy's broadcast.
 
 
     # TODO: Implement this to actually do something, right now all parameters are fixed.
