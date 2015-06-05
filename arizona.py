@@ -8,7 +8,7 @@ import copy
 from warnings import warn
 
 # Added by Enrique Noriega
-from scipy.stats import norm
+from scipy.stats import norm, invgamma, gamma
 
 from pyhsmm.basic.abstractions import Distribution, GibbsSampling
 
@@ -129,17 +129,26 @@ class LinearGaussian(GibbsSampling, Distribution):
         del self._others
         self._others = np.matrix(np.zeros(self.l.shape))
 
-    def __init__(self, W, l):
+    def __init__(self, W, l, ah=.1, bh=.1, bayesian=True):
         ''' W is the weight matrix and l is the state vector
 
             l is a binary vector and W a real matrix
         '''
+
+        self.bayesian = bayesian
+        # Hyper parameters for the covariance
+        self.ah = ah
+        self.bh = bh
+
 
         self.W = np.matrix(W)
 
         # Enforce l to be a column vector
         if l.shape[1] > 1:
             l = l.T
+
+        # Initial identity covariance matrix
+        self.variances = np.ones(W.shape[0])
 
         self.l = np.concatenate([np.matrix(l), np.matrix([1])]) # Added the bias term
         self.others = np.matrix(np.zeros(self.l.shape))
@@ -155,10 +164,11 @@ class LinearGaussian(GibbsSampling, Distribution):
         ''' Generates a random variate (sample)
         '''
 
-        import ipdb; ipdb.set_trace()
-
         # Compute the state vector given the other chains
         global_state = self.l + self.others
+
+        # Correct the overflow in the bias term
+        global_state[-1, :] = 1.
 
         # Compute the weights vector, which becomes the mean vector
         w = self.W*global_state #These should be numpy's matrix objects so this works
@@ -170,7 +180,7 @@ class LinearGaussian(GibbsSampling, Distribution):
 
         for j in xrange(w.shape[0]):
             #TODO: Rewrite this to avoid the loop
-            variate[:, j] = stats.norm.rvs(size=(size, 1), loc=w[j])
+            variate[:, j] = stats.norm.rvs(size=(size, 1), loc=w[j], scale=np.sqrt(self.variances))
 
         return variate
 
@@ -195,9 +205,43 @@ class LinearGaussian(GibbsSampling, Distribution):
         #     X = X.T
         # import ipdb; ipdb.set_trace()
 
-        return np.sum(norm.logpdf(X, loc=w.T), axis=1) # w is a column vector so we transpose it to leverage numpy's broadcast.
+        return np.sum(norm.logpdf(X, loc=w.T, scale=np.sqrt(self.variances)), axis=1) # w is a column vector so we transpose it to leverage numpy's broadcast.
 
 
     # TODO: Implement this to actually do something, right now all parameters are fixed.
     def resample(self,data=[]):
-        pass
+
+        return
+        if self.bayesian:
+            # Compute the states matrix of the whole sequence given the other chains' states
+            global_state = self.l + self.others
+
+            # Correct the overflow in the bias term
+            global_state[-1, :] = 1.
+
+            # Sanity check
+            assert global_state[global_state > 1].any() == False, "There is a problem rebuilding the global state matrix"
+            w = self.W*global_state #These should be numpy's matrix objects so this works
+
+            # Reconstruct the indices of the data
+            data = data[0]
+
+            idx = np.zeros(data.shape[0], dtype=int)
+            for i in xrange(data.shape[0]):
+                idx[i] = np.where(np.all(self.global_data == data[i, :], axis=1))[0]
+
+            # Compute the sum of squared errors
+            centered = np.power(data - w.T[idx, :], 2)
+
+            sse = np.sum(centered, axis=0)
+
+            variances = np.ones(sse.shape[1])
+            # Resample the variances
+            for i in xrange(sse.shape[1]):
+                alpha = self.ah + (self.global_data.shape[0]/2.)
+                beta = 1. /(self.bh + (sse[0, i]/2.))
+
+                sample = invgamma.rvs(alpha, beta)
+                variances[i] = sample
+
+            self.variances = variances

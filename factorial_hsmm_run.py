@@ -9,8 +9,8 @@ from pyhsmm.util.text import progprint_xrange
 
 from arizona import LinearGaussian
 from scipy.stats import invgamma
-from utils import *
 
+from utils import *
 
 
 plt.ion()
@@ -23,21 +23,26 @@ weights = np.loadtxt('weights.txt').T
 # Add the bias term to the observations
 #observations = np.concatenate([observations, np.ones((observations.shape[0], 1))], axis=1)
 
-ITER = 1000 # Number of iterations of MCMC
+ITER = 1500 # Number of iterations of MCMC
 T = observations.shape[0]
 COMP = 7
 Nmax = 2 # Two states per component
 
+
 ### construct posterior model
+
+dur_hypparams = {'alpha_0':10,
+                 'beta_0':2}
+dur_distns = [pyhsmm.distributions.PoissonDuration(**dur_hypparams) for state in range(2)]
 
 # Instantiate an HMM per factor
 components = []
 for i in xrange(COMP):
-    component = pyhsmm.models.HMM(alpha=6.,init_state_concentration=.5, obs_distns = [
+    component = pyhsmm.models.HSMM(alpha=6., init_state_concentration=.5, obs_distns = [
         LinearGaussian(weights, np.matrix(get_binary_vector(l, i, COMP))) for l in xrange(2)
-    ])
+    ], dur_distns = dur_distns)
 
-    component.add_data(data=observations)
+    component.add_data(data=observations, trunc=60)
     components.append(component)
 
 
@@ -106,7 +111,7 @@ for itr in progprint_xrange(ITER):
 
     # Do something to collect the hidden states and the likelihood of the model if
     # this is the appropriate iteration
-    if (itr <10 or ((itr+1) % 10) == 0):
+    if (itr % 1) == 0:
         # Collect stats into the dataframe
         stats = collect_stats(components, real_states)
         results.append(list(stats))
