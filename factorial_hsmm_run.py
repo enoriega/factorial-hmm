@@ -23,7 +23,7 @@ weights = np.loadtxt('weights.txt').T
 # Add the bias term to the observations
 #observations = np.concatenate([observations, np.ones((observations.shape[0], 1))], axis=1)
 
-ITER = 1500 # Number of iterations of MCMC
+ITER = 1000 # Number of iterations of MCMC
 T = observations.shape[0]
 COMP = 7
 Nmax = 2 # Two states per component
@@ -51,7 +51,7 @@ for i in xrange(COMP):
 results = []#pd.DataFrame(columns=['Log-Likelihood', 'Accuracy', 'Precision', 'Recall', 'F1'])
 
 # Collect stats into the dataframe
-stats = collect_stats(components, real_states)
+stats = collect_stats(components, real_states, weights)
 results.append(list(stats))
 
 
@@ -113,7 +113,7 @@ for itr in progprint_xrange(ITER):
     # this is the appropriate iteration
     if (itr % 1) == 0:
         # Collect stats into the dataframe
-        stats = collect_stats(components, real_states)
+        stats = collect_stats(components, real_states, test_obs, weights)
         results.append(list(stats))
 
 
