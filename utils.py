@@ -9,25 +9,19 @@ def get_binary_vector(state, comp_no, COMP):
 
     return ret
 
-def collect_stats(components, real_states, testing_obs, weights, vars):
+def collect_stats(components, real_states, real_obs, testing_obs, weights, vars, Model):
     ''' Returns stats about the current approx of the posterior '''
 
-
-    llj = sum([c.log_likelihood() for c in components])
-
-
-    # Observed log-likelihood
     weights = np.matrix(weights)
 
-    state_seqs = np.matrix(np.ones((8, testing_obs.shape[0])))
-    state_seqs[:7, :] = [c.heldout_viterbi(testing_obs) for c in components]
+    # Training log-lokelihood
+    training_states = get_states_matrix(components)
+    llj = compute_likelihood(real_obs, training_states, weights, vars)
 
-    # import ipdb; ipdb.set_trace()
-
-    means = state_seqs.T * weights.T
-
-    tll = norm.logpdf(testing_obs, loc=means, scale=np.sqrt(vars)).sum()
-    ########################
+    # Testing log-likelihood
+    # Generate a new sample
+    testing_states = sample_testing_states(components, testing_obs, Model)
+    tll = np.array([compute_likelihood(testing_obs, tc, weights, vars) for tc in testing_states]).mean()
 
 
     predicted = np.array([c.states_list[0].stateseq for c in components]).T
@@ -37,7 +31,71 @@ def collect_stats(components, real_states, testing_obs, weights, vars):
     acc = accuracy_score(predicted.flatten(), real_states.flatten())
     pr, rc, f1, _ = precision_recall_fscore_support(predicted.flatten(), real_states.flatten())
 
-    return llj,acc,pr[1],rc[1],f1[1], tll
+    return llj/400.,acc,pr[1],rc[1],f1[1], tll/400.
+
+
+def sample_testing_states(components, testing_obs, Model):
+
+
+    ret = []
+    testing_components = []
+    for component in components:
+
+        if hasattr(component, 'dur_distns'):
+            tc = Model(trans_distn=component.trans_distn, dur_distns=component.dur_distns, obs_distns=component.obs_distns, init_state_distn=component.init_state_distn)
+        else:
+            tc = Model(trans_distn=component.trans_distn, obs_distns=component.obs_distns, init_state_distn=component.init_state_distn)
+
+        tc.add_data(testing_obs)
+
+        testing_components.append(tc)
+
+    for i in xrange(100):
+
+        for tc in testing_components:
+
+            # Now sample states for the testing observations
+            testing_states = np.zeros((len(components)+1, testing_obs.shape[0]))
+            testing_states[-1, :] = 1. # The bias term
+
+
+            for i, other in enumerate(testing_components):
+                # Only if this is another chain
+                if other != tc:
+                    seq = other.states_list[0].stateseq
+                    testing_states[i, :] = seq
+
+            for obs_dist in tc.obs_distns:
+                obs_dist.others = testing_states
+                # Set the new variances as part of resampling the emission model
+
+            # Resample the rest of the model:
+            tc.resample_states()
+
+            del testing_states
+
+        ret.append(get_states_matrix(testing_components))
+
+
+    return ret
+
+
+def get_states_matrix(components):
+
+    chains = [c.states_list[0].stateseq for c in components]
+    chains.append(np.array([1 for i in xrange(components[0].states_list[0].stateseq.shape[0])]))
+
+    return np.matrix(chains)
+
+def compute_likelihood(data, states, weights, variances):
+
+    W = weights*states
+    centered = data.T - W
+    sse = np.power(centered.sum(axis=1), 2)
+
+    ll = np.array([-(0.5*(1./variances[0, k])*sse[k, 0] + np.log(2*np.pi*variances[0, k])) for k in xrange(sse.shape[0])]).sum()
+
+    return ll
 
 
 def write_files(frame):

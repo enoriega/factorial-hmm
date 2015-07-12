@@ -19,6 +19,12 @@ plt.ion()
 observations = np.loadtxt('obs.txt')
 real_states = np.loadtxt('states.txt')
 weights = np.loadtxt('weights.txt').T
+testing = np.loadtxt('test_obs.txt')
+
+Model = pyhsmm.models.HSMM
+hyper = {
+    'alpha':6.,'init_state_concentration':.5,
+}
 
 # Add the bias term to the observations
 #observations = np.concatenate([observations, np.ones((observations.shape[0], 1))], axis=1)
@@ -38,11 +44,11 @@ dur_distns = [pyhsmm.distributions.PoissonDuration(**dur_hypparams) for state in
 # Instantiate an HMM per factor
 components = []
 for i in xrange(COMP):
-    component = pyhsmm.models.HSMM(alpha=6., init_state_concentration=.5, obs_distns = [
+    component = Model(dur_distns=dur_distns, obs_distns = [
         LinearGaussian(weights, np.matrix(get_binary_vector(l, i, COMP))) for l in xrange(2)
-    ], dur_distns = dur_distns)
+    ], **hyper)
 
-    component.add_data(data=observations, trunc=60)
+    component.add_data(data=observations)
     components.append(component)
 
 
@@ -51,7 +57,7 @@ for i in xrange(COMP):
 results = []#pd.DataFrame(columns=['Log-Likelihood', 'Accuracy', 'Precision', 'Recall', 'F1'])
 
 # Collect stats into the dataframe
-stats = collect_stats(components, real_states, weights)
+stats = collect_stats(components, real_states, observations, testing, weights, np.ones((1, testing.shape[1])), Model)
 results.append(list(stats))
 
 
@@ -74,7 +80,7 @@ for itr in progprint_xrange(ITER):
     sse = np.power(observations - means.T, 2).sum(axis=0)
 
 
-
+    # Learn the new variances
     new_variances = np.zeros((1, sse.shape[1]))
 
     for i in xrange(sse.shape[1]):
@@ -82,6 +88,7 @@ for itr in progprint_xrange(ITER):
         beta = (.05 + (sse[0, i]/2.))
         new_variances[0, i] = invgamma.rvs(alpha, scale=beta)
 
+    # Delete the states to avoid memory leaks
     del states
 
     for component in components:
@@ -98,28 +105,49 @@ for itr in progprint_xrange(ITER):
 
         for obs_dist in component.obs_distns:
             obs_dist.others = global_states
+            # Set the new variances as part of resampling the emission model
             obs_dist.variances = new_variances
-            #obs_dist.global_data = observations
 
+        # Resample the rest of the model
         component.resample_model()
 
         del global_states # To avoid memory leaks
 
 
 
-
-
     # Do something to collect the hidden states and the likelihood of the model if
     # this is the appropriate iteration
-    if (itr % 1) == 0:
+    if (itr <10 or ((itr+1) % 10) == 0):
         # Collect stats into the dataframe
-        stats = collect_stats(components, real_states, test_obs, weights)
+
+        #testing_states = np.matrix(np.ones((COMP+1, testing.shape[0])))
+        testing_states = []
+        for i, component in enumerate(components):
+            component.add_data(testing)
+            states = component.states_list.pop()
+            states.generate_states()
+            testing_states.append(states.stateseq)
+
+        testing_states.append(np.ones(testing_states[0].shape[0]))
+
+        stats = collect_stats(components, real_states, observations, testing, weights, new_variances, Model)
         results.append(list(stats))
 
+        # Now that the resampling is done, instantiate a new model with the approximate
+        # parameters to measure the testing data set likelihood
+        # testing_ll.append(sum([c.log_likelihood(testing) for c in components]))
 
-frame = pd.DataFrame(results, columns=['llj', 'acc', 'pr', 'rc', 'f1'])
 
+frame = pd.DataFrame(results, columns=['llj', 'acc', 'pr', 'rc', 'f1', 'tll'])
+
+# tll = pd.Series(testing_ll)
+# frame['tll'] = tll
+
+plt.figure()
 frame.llj.plot()
+frame.tll.plot()
 plt.show()
+
+write_files(frame)
 
 print "Done!!"
